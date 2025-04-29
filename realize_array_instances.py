@@ -1,9 +1,9 @@
 import bpy
-from mathutils import Matrix
+from mathutils import Matrix, Quaternion
 
 # Blender 4.4 script to realize all instances of an Array modifier using an animated empty as Object Offset.
 # This duplicates the object for each array element and bakes world-space transforms into keyframes,
-# using quaternion keyframes to prevent Euler wrapping issues.
+# ensuring quaternion continuity to avoid flipping artifacts.
 
 def realize_array_instances():
     context = bpy.context
@@ -59,10 +59,10 @@ def realize_array_instances():
         bpy.ops.object.duplicate()
         inst = context.view_layer.objects.active
         # Remove any Array modifiers
-        for m in [m for m in inst.modifiers if m.type == 'ARRAY']:
-            inst.modifiers.remove(m)
+        for m in inst.modifiers:
+            if m.type == 'ARRAY':
+                inst.modifiers.remove(m)
         inst.parent = None
-        # Use quaternion mode to avoid gimbal wrap
         inst.rotation_mode = 'QUATERNION'
         instances.append(inst)
 
@@ -71,16 +71,27 @@ def realize_array_instances():
     original.select_set(True)
     bpy.ops.object.delete()
 
-    # Bake transforms with quaternion keyframes
-    for idx, inst in enumerate(instances):
-        inst.rotation_mode = 'QUATERNION'
-        for frame_idx, frame in enumerate(range(start, end + 1)):
-            inst.matrix_world = mats[frame_idx][idx]
+    # Bake transforms frame-by-frame, ensuring quaternion continuity
+    prev_quats = [None] * count
+    for frame_idx, frame in enumerate(range(start, end + 1)):
+        for idx, inst in enumerate(instances):
+            mat = mats[frame_idx][idx]
+            loc, rot, scale = mat.decompose()  # returns (Vector, Quaternion, Vector)
+            # Flip quaternion if needed for continuity
+            if prev_quats[idx] and prev_quats[idx].dot(rot) < 0:
+                rot = -rot
+            prev_quats[idx] = rot.copy()
+
+            # Assign transforms
+            inst.location = loc
+            inst.rotation_quaternion = rot
+            inst.scale = scale
+            # Insert keyframes
             inst.keyframe_insert(data_path="location", frame=frame)
             inst.keyframe_insert(data_path="rotation_quaternion", frame=frame)
             inst.keyframe_insert(data_path="scale", frame=frame)
 
-    print(f"Realized {count} instances with baked quaternion animation.")
+    print(f"Realized {count} instances with baked quaternion animation and continuity.")
 
 if __name__ == "__main__":
     realize_array_instances()
